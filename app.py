@@ -552,10 +552,24 @@ def upgrade_unit(unit_id):
     # Consume materials (with tier conversion)
     items = consume_materials(materials, items)
     save_items(items)
-    
+    # Update unit current stats to match goal (keep unit in list)
+    conn.execute('''
+        UPDATE building_characters
+        SET current_level = ?, current_ascension = ?
+        WHERE id = ?
+    ''', (unit['goal_level'], unit['goal_ascension'], unit_id))
+
+    # For characters, set all current potentials to their goal values
+    conn.execute('''
+        UPDATE building_potentials
+        SET current_level = goal_level
+        WHERE character_id = ?
+    ''', (unit_id,))
+
+    save_items(items)
     conn.commit()
     conn.close()
-    
+
     return jsonify({'status': 'success'})
 
 @app.route('/api/materials')
