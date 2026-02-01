@@ -170,6 +170,199 @@ def calculate_materials_for_unit(unit_id):
     conn.close()
     return materials
 
+def get_tier_conversion(item_name):
+    """Get tier conversion multipliers for an item
+    
+    Returns: (tier2_multiplier, tier3_multiplier)
+    XP materials: 5x, 20x
+    Other materials: 3x, 9x
+    """
+    if item_name.startswith('Char_Level_') or item_name.startswith('Part_Level_'):
+        return 5, 20
+    else:
+        return 3, 9
+
+def check_materials_available(needed_materials, inventory):
+    """Check if inventory has enough materials with tier conversion and universal fallback
+    
+    Args:
+        needed_materials: dict of {item_name: amount_needed}
+        inventory: dict of {item_name: {type, amount}}
+    
+    Returns:
+        (available, missing_items) where available is bool and missing_items is list of shortages
+    """
+    missing_items = []
+    inventory_copy = {k: v['amount'] for k, v in inventory.items()}
+    
+    # Define universal material mappings
+    def get_universal_items(item_name):
+        """Get applicable universal items for a given material"""
+        # Universals are stored without tier suffix in items.csv
+        # and represent tier-1 equivalents for their category
+        if item_name.startswith('Char_Ascend_'):
+            return ['Char_Ascend_Universal']
+        elif item_name.startswith('Part_Ascend_'):
+            return ['Part_Ascend_Universal']
+        elif item_name.split('_')[0] in ['Passion', 'Instinct', 'Void', 'Order', 'Justice']:
+            return ['Potential_Universal']
+        return []
+    
+    for item, needed in needed_materials.items():
+        available = inventory_copy.get(item, 0)
+        
+        # For tiered items (ending in _1, _2, _3), do conversion
+        base_match = item.replace('_1', '').replace('_2', '').replace('_3', '')
+        tier_match = item[-2:]  # Get _1, _2, or _3
+        
+        if tier_match in ['_1', '_2', '_3']:
+            current_tier = int(tier_match.replace('_', ''))
+            tier2_mult, tier3_mult = get_tier_conversion(item)
+            total_available_tier1 = 0
+            
+            # Convert current item to tier 1 equivalent (even if 0)
+            if current_tier == 1:
+                total_available_tier1 = available
+            elif current_tier == 2:
+                total_available_tier1 = available * tier2_mult
+            elif current_tier == 3:
+                total_available_tier1 = available * tier3_mult
+            
+            # Add other tiers of same type converted to tier 1 equivalent
+            for t in [1, 2, 3]:
+                if t != current_tier:
+                    other_item = f'{base_match}_{t}'
+                    other_amount = inventory_copy.get(other_item, 0)
+                    if other_amount > 0:
+                        if t == 1:
+                            total_available_tier1 += other_amount
+                        elif t == 2:
+                            total_available_tier1 += other_amount * tier2_mult
+                        elif t == 3:
+                            total_available_tier1 += other_amount * tier3_mult
+            
+            # Add universal items if applicable (counted as tier 1)
+            for universal in get_universal_items(item):
+                universal_amount = inventory_copy.get(universal, 0)
+                if universal_amount > 0:
+                    # Universal items are calculated as tier 1 of their category
+                    total_available_tier1 += universal_amount
+            
+            # Convert needed to tier 1 equivalent
+            if current_tier == 1:
+                total_needed_tier1 = needed
+            elif current_tier == 2:
+                total_needed_tier1 = needed * tier2_mult
+            elif current_tier == 3:
+                total_needed_tier1 = needed * tier3_mult
+            
+            if total_available_tier1 < total_needed_tier1:
+                missing_items.append(f'{item} (need {needed}, have {available})')
+        else:
+            # Non-tiered items, just check direct amount
+            if available < needed:
+                missing_items.append(f'{item} (need {needed}, have {available})')
+    
+    return len(missing_items) == 0, missing_items
+
+def consume_materials(needed_materials, inventory):
+    """Consume materials with tier conversion and universal fallback
+    
+    Args:
+        needed_materials: dict of {item_name: amount_needed}
+        inventory: dict of {item_name: {type, amount}}
+    
+    Returns:
+        Updated inventory dict
+    """
+    def get_universal_items(item_name):
+        """Get applicable universal items for a given material"""
+        if item_name.startswith('Char_Ascend_'):
+            parts = item_name.split('_')
+            tier = parts[-1]
+            return [f'Char_Ascend_Universal_{tier}']
+        elif item_name.startswith('Part_Ascend_'):
+            parts = item_name.split('_')
+            tier = parts[-1]
+            return [f'Part_Ascend_Universal_{tier}']
+        elif item_name in ['Passion_1', 'Passion_2', 'Passion_3', 'Instinct_1', 'Instinct_2', 'Instinct_3',
+                           'Void_1', 'Void_2', 'Void_3', 'Order_1', 'Order_2', 'Order_3',
+                           'Justice_1', 'Justice_2', 'Justice_3']:
+            tier = item_name.split('_')[-1]
+            return [f'Potential_Universal_{tier}']
+        return []
+    
+    for item, needed in needed_materials.items():
+        if item not in inventory:
+            continue
+        
+        available = inventory[item]['amount']
+        base_match = item.replace('_1', '').replace('_2', '').replace('_3', '')
+        tier_match = item[-2:]
+        
+        if tier_match in ['_1', '_2', '_3']:
+            current_tier = int(tier_match.replace('_', ''))
+            tier2_mult, tier3_mult = get_tier_conversion(item)
+            
+            # Convert needed to tier 1 equivalent
+            if current_tier == 1:
+                total_needed_tier1 = needed
+            elif current_tier == 2:
+                total_needed_tier1 = needed * tier2_mult
+            elif current_tier == 3:
+                total_needed_tier1 = needed * tier3_mult
+            
+            # First use what we have of the current tier
+            if current_tier == 1:
+                current_use = min(available, needed)
+                inventory[item]['amount'] -= current_use
+                total_needed_tier1 -= current_use
+            elif current_tier == 2:
+                current_use = min(available, needed)
+                inventory[item]['amount'] -= current_use
+                total_needed_tier1 -= current_use * tier2_mult
+            elif current_tier == 3:
+                current_use = min(available, needed)
+                inventory[item]['amount'] -= current_use
+                total_needed_tier1 -= current_use * tier3_mult
+            
+            # Then use higher tiers if needed
+            if total_needed_tier1 > 0 and current_tier < 3:
+                for t in range(current_tier + 1, 4):
+                    other_item = f'{base_match}_{t}'
+                    if other_item in inventory and inventory[other_item]['amount'] > 0:
+                        if t == 2:
+                            can_use = min(inventory[other_item]['amount'], (total_needed_tier1 + tier2_mult - 1) // tier2_mult)
+                            inventory[other_item]['amount'] -= can_use
+                            total_needed_tier1 -= can_use * tier2_mult
+                        elif t == 3:
+                            can_use = min(inventory[other_item]['amount'], (total_needed_tier1 + tier3_mult - 1) // tier3_mult)
+                            inventory[other_item]['amount'] -= can_use
+                            total_needed_tier1 -= can_use * tier3_mult
+            
+            # Then use lower tiers if needed
+            if total_needed_tier1 > 0 and current_tier > 1:
+                for t in range(current_tier - 1, 0, -1):
+                    other_item = f'{base_match}_{t}'
+                    if other_item in inventory and inventory[other_item]['amount'] > 0:
+                        can_use = min(inventory[other_item]['amount'], total_needed_tier1)
+                        inventory[other_item]['amount'] -= can_use
+                        total_needed_tier1 -= can_use
+            
+            # Finally use universal items if still needed (universal = tier 1 equivalent)
+            if total_needed_tier1 > 0:
+                for universal in get_universal_items(item):
+                    # Universals are stored without tiers and count as tier-1 equivalents
+                    if universal in inventory and inventory[universal]['amount'] > 0 and total_needed_tier1 > 0:
+                        can_use = min(inventory[universal]['amount'], total_needed_tier1)
+                        inventory[universal]['amount'] -= can_use
+                        total_needed_tier1 -= can_use
+        else:
+            # Non-tiered items
+            inventory[item]['amount'] -= needed
+    
+    return inventory
+
 def calculate_all_materials():
     """Calculate total materials needed for all units being built"""
     conn = get_db_connection()
@@ -350,20 +543,15 @@ def upgrade_unit(unit_id):
     # Load current inventory
     items = load_items()
     
-    # Check if we have enough materials
-    for item, needed in materials.items():
-        if item not in items or items[item]['amount'] < needed:
-            conn.close()
-            return jsonify({'status': 'error', 'message': f'Not enough {item}'}), 400
+    # Check if we have enough materials (with tier conversion)
+    available, missing = check_materials_available(materials, items)
+    if not available:
+        conn.close()
+        return jsonify({'status': 'error', 'message': f'Not enough materials: {missing[0]}'}), 400
     
-    # Consume materials
-    for item, needed in materials.items():
-        items[item]['amount'] -= needed
-    
+    # Consume materials (with tier conversion)
+    items = consume_materials(materials, items)
     save_items(items)
-    
-    # Keep the unit in the list - don't auto-update current to goal
-    # Just consume the materials
     
     conn.commit()
     conn.close()
