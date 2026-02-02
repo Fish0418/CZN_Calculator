@@ -167,26 +167,29 @@ function convertMaterials(itemName, needed, available) {
     const isXPItem = itemName.includes('Level_');
     
     if (tier && !isXPItem) {
-        // Regular materials use 3:1 conversion
+        // Regular materials use 3:1 for tiers (tier values: 1,3,9)
         const currentTier = parseInt(tier[1]);
-        let totalAvailable = available;
-        
-        // Convert higher tiers down
-        for (let t = currentTier + 1; t <= 3; t++) {
-            const higherItem = `${baseName}_${t}`;
-            if (items[higherItem]) {
-                totalAvailable += items[higherItem].amount * 3;
+        const tierValues = {1:1, 2:3, 3:9};
+        let totalAvailable = 0;
+
+        for (let t = 1; t <= 3; t++) {
+            const otherItem = `${baseName}_${t}`;
+            const otherAmount = items[otherItem] ? items[otherItem].amount : 0;
+            if (otherAmount <= 0) continue;
+
+            if (t === currentTier) {
+                totalAvailable += otherAmount;
+            } else if (t > currentTier) {
+                // Convert higher tiers down to current tier
+                const multiplier = tierValues[t] / tierValues[currentTier];
+                totalAvailable += otherAmount * multiplier;
+            } else {
+                // Convert lower tiers up to current tier (use integer division)
+                const divisor = tierValues[currentTier] / tierValues[t];
+                totalAvailable += Math.floor(otherAmount / divisor);
             }
         }
-        
-        // Convert lower tiers up
-        for (let t = currentTier - 1; t >= 1; t--) {
-            const lowerItem = `${baseName}_${t}`;
-            if (items[lowerItem]) {
-                totalAvailable += Math.floor(items[lowerItem].amount / 3);
-            }
-        }
-        
+
         result.available = totalAvailable;
         result.fulfilled = totalAvailable >= needed;
         result.excess = Math.max(0, totalAvailable - needed);
