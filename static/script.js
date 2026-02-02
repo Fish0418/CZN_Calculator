@@ -282,14 +282,32 @@ function applyUniversalConversions(materialsNeeded, inventory) {
         for (const [universalName, targetItems] of Object.entries(universalMappings)) {
             if (targetItems.some(target => itemName.startsWith(target.replace('_1', '')))) {
                 // Check if we have universal items and this item is not yet fulfilled
-                const universalAvailable = (inventory[universalName]?.amount || 0) - universalsUsed[universalName];
-                if (universalAvailable > 0 && !converted.fulfilled) {
-                    const shortage = converted.needed - converted.available;
-                    const toUse = Math.min(universalAvailable, shortage);
-                    universalsUsed[universalName] += toUse;
-                    converted.available += toUse;
-                    converted.fulfilled = converted.available >= converted.needed;
-                }
+                    const universalAvailable = (inventory[universalName]?.amount || 0) - universalsUsed[universalName];
+                    if (universalAvailable > 0 && !converted.fulfilled) {
+                        // Determine tier multipliers to convert between tier1 (universal) and target tier
+                        const tierMatch = itemName.match(/_([123])$/);
+                        const tier = tierMatch ? parseInt(tierMatch[1]) : 1;
+                        const isXP = itemName.includes('Level_');
+                        const tier2Mult = isXP ? 5 : 3;
+                        const tier3Mult = isXP ? 20 : 9;
+
+                        const shortage = converted.needed - converted.available; // in target-tier units
+
+                        // Convert shortage to tier-1 equivalents
+                        const shortageTier1 = tier === 1 ? shortage : (tier === 2 ? shortage * tier2Mult : shortage * tier3Mult);
+
+                        // Use universals (which are tier-1 equivalents)
+                        const useUniversalsTier1 = Math.min(universalAvailable, shortageTier1);
+                        if (useUniversalsTier1 > 0) {
+                            // Increase universalsUsed by amount of tier1 units used
+                            universalsUsed[universalName] += useUniversalsTier1;
+
+                            // Convert used universals back into target-tier units and add to available
+                            const addedTargetUnits = tier === 1 ? useUniversalsTier1 : Math.floor(useUniversalsTier1 / (tier === 2 ? tier2Mult : tier3Mult));
+                            converted.available += addedTargetUnits;
+                            converted.fulfilled = converted.available >= converted.needed;
+                        }
+                    }
             }
         }
         
