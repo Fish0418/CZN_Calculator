@@ -593,10 +593,12 @@ async function openUnitDetailsModal(unit) {
     // Show potential goals summary
     const potSummaryEl = document.getElementById('detailsPotentials');
     if (unit.potentials && unit.potentials.length) {
-        const parts = unit.potentials.map(p => `${p.potential_type.replace(/_/g,' ')}: ${p.current_level} → ${p.goal_level}`);
-        potSummaryEl.textContent = parts.join(' | ');
+        // Render each potential on its own line to avoid horizontal overflow
+        potSummaryEl.innerHTML = unit.potentials.map(p =>
+            `<div class="details-potential-item"><span class="pot-name">${p.potential_type.replace(/_/g,' ')}</span>: <span class="pot-values">${p.current_level} → ${p.goal_level}</span></div>`
+        ).join('');
     } else {
-        potSummaryEl.textContent = '';
+        potSummaryEl.innerHTML = '';
     }
     
     // Calculate materials for this unit
