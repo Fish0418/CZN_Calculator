@@ -137,6 +137,13 @@ function getItemTier(itemName) {
     return 'credit';
 }
 
+// Format large numbers using 'k' for thousands
+function formatNumber(n) {
+    if (typeof n !== 'number') n = parseInt(n) || 0;
+    if (Math.abs(n) >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+    return String(n);
+}
+
 // Get material sort priority (lower = earlier)
 function getMaterialSortPriority(itemName) {
     if (itemName === 'Unit') return 1;
@@ -254,69 +261,133 @@ async function calculateTotalMaterials() {
 
 // Apply universal conversions to materials
 function applyUniversalConversions(materialsNeeded, inventory) {
+    // New grouped allocation algorithm:
+    // 1) Group tiered materials by base name (without _1/_2/_3)
+    // 2) For each group: allocate same-tier items first (cap display at needed)
+    // 3) Convert remaining inventory to tier-1 equivalents (using correct multipliers)
+    // 4) Allocate those equivalents to remaining needs prioritizing highest tiers
+    // 5) Return a map of itemName -> converted info (needed, available, fulfilled, excess)
+
     const result = {};
-    
-    // Categories for universal items
-    const universalMappings = {
-        'Potential_Universal': ['Void_1', 'Passion_1', 'Order_1', 'Justice_1', 'Instinct_1'],
-        'Char_Ascend_Universal': ['Char_Ascend_Striker_1', 'Char_Ascend_Vanguard_1', 'Char_Ascend_Controller_1', 
-                                  'Char_Ascend_Ranger_1', 'Char_Ascend_Hunter_1', 'Char_Ascend_Psionic_1'],
-        'Part_Ascend_Universal': ['Part_Ascend_Striker_1', 'Part_Ascend_Vanguard_1', 'Part_Ascend_Controller_1',
-                                  'Part_Ascend_Ranger_1', 'Part_Ascend_Hunter_1', 'Part_Ascend_Psionic_1']
-    };
-    
-    // Track how many universals we've used
-    const universalsUsed = {};
-    Object.keys(universalMappings).forEach(key => universalsUsed[key] = 0);
-    
-    // Sort materials to process completed ones last
-    const sortedMaterials = Object.entries(materialsNeeded).sort((a, b) => {
-        const aFulfilled = convertMaterials(a[0], a[1], inventory[a[0]]?.amount || 0).fulfilled;
-        const bFulfilled = convertMaterials(b[0], b[1], inventory[b[0]]?.amount || 0).fulfilled;
-        if (aFulfilled !== bFulfilled) return aFulfilled ? 1 : -1;
-        return 0;
-    });
-    
-    // Apply universal conversions
-    for (const [itemName, needed] of sortedMaterials) {
-        let converted = convertMaterials(itemName, needed, inventory[itemName]?.amount || 0);
-        
-        // Check if this item can use universal
-        for (const [universalName, targetItems] of Object.entries(universalMappings)) {
-            if (targetItems.some(target => itemName.startsWith(target.replace('_1', '')))) {
-                // Check if we have universal items and this item is not yet fulfilled
-                    const universalAvailable = (inventory[universalName]?.amount || 0) - universalsUsed[universalName];
-                    if (universalAvailable > 0 && !converted.fulfilled) {
-                        // Determine tier multipliers to convert between tier1 (universal) and target tier
-                        const tierMatch = itemName.match(/_([123])$/);
-                        const tier = tierMatch ? parseInt(tierMatch[1]) : 1;
-                        const isXP = itemName.includes('Level_');
-                        const tier2Mult = isXP ? 5 : 3;
-                        const tier3Mult = isXP ? 20 : 9;
 
-                        const shortage = converted.needed - converted.available; // in target-tier units
+    // multipliers: XP items use 1,5,20 ; others use 1,3,9
+    function tierValuesFor(baseName) {
+        const isXP = baseName.includes('Level');
+        return isXP ? {1:1,2:5,3:20} : {1:1,2:3,3:9};
+    }
 
-                        // Convert shortage to tier-1 equivalents
-                        const shortageTier1 = tier === 1 ? shortage : (tier === 2 ? shortage * tier2Mult : shortage * tier3Mult);
+    // determine universal key for a base
+    function universalKeyFor(baseName) {
+        if (baseName.startsWith('Char_Ascend_') || baseName.startsWith('Char_Ascend')) return 'Char_Ascend_Universal';
+        if (baseName.startsWith('Part_Ascend_') || baseName.startsWith('Part_Ascend')) return 'Part_Ascend_Universal';
+        // potentials like Passion_1 etc
+        const attr = baseName.split('_')[0];
+        if (['Void','Passion','Order','Justice','Instinct'].includes(attr)) return 'Potential_Universal';
+        return null;
+    }
 
-                        // Use universals (which are tier-1 equivalents)
-                        const useUniversalsTier1 = Math.min(universalAvailable, shortageTier1);
-                        if (useUniversalsTier1 > 0) {
-                            // Increase universalsUsed by amount of tier1 units used
-                            universalsUsed[universalName] += useUniversalsTier1;
+    // collect all tiered bases present in materialsNeeded
+    const bases = {};
+    for (const [itemName, needed] of Object.entries(materialsNeeded)) {
+        const m = itemName.match(/(.+)_([123])$/);
+        if (!m) {
+            // non-tiered, copy through
+            result[itemName] = convertMaterials(itemName, needed, inventory[itemName]?.amount || 0);
+            continue;
+        }
+        const base = m[1];
+        const tier = parseInt(m[2]);
+        bases[base] = bases[base] || {needed:{1:0,2:0,3:0}, inv:{1:0,2:0,3:0}};
+        bases[base].needed[tier] = needed;
+    }
 
-                            // Convert used universals back into target-tier units and add to available
-                            const addedTargetUnits = tier === 1 ? useUniversalsTier1 : Math.floor(useUniversalsTier1 / (tier === 2 ? tier2Mult : tier3Mult));
-                            converted.available += addedTargetUnits;
-                            converted.fulfilled = converted.available >= converted.needed;
-                        }
-                    }
+    // read inventory counts into bases
+    for (const base of Object.keys(bases)) {
+        for (let t=1;t<=3;t++) {
+            const key = `${base}_${t}`;
+            bases[base].inv[t] = inventory[key]?.amount || 0;
+        }
+        // add universal amount (as tier-1 equivalents)
+        const ukey = universalKeyFor(base);
+        bases[base].universal = ukey ? (inventory[ukey]?.amount || 0) : 0;
+    }
+
+    // allocate per base, using global universal pools consumed in order
+    const universalPools = {};
+    // initialize global pools for each universal key
+    for (const base of Object.keys(bases)) {
+        const ukey = universalKeyFor(base);
+        if (ukey && universalPools[ukey] === undefined) {
+            universalPools[ukey] = inventory[ukey]?.amount || 0;
+        }
+    }
+
+    // preserve insertion order of bases according to first appearance in materialsNeeded
+    const baseOrder = Object.keys(bases);
+
+    for (const base of baseOrder) {
+        const data = bases[base];
+        const vals = tierValuesFor(base);
+        const used_same = {1:0,2:0,3:0};
+        const inv_rem = {1:0,2:0,3:0};
+        const need_rem = {1:0,2:0,3:0};
+
+        for (let t=1;t<=3;t++) {
+            used_same[t] = Math.min(data.inv[t], data.needed[t]);
+            inv_rem[t] = data.inv[t] - used_same[t];
+            need_rem[t] = data.needed[t] - used_same[t];
+        }
+
+        // First: use universals for this base (if any) - apply to lowest tiers first (1 -> 2 -> 3)
+        const ukey = universalKeyFor(base);
+        const used_from_universal = {1:0,2:0,3:0};
+        if (ukey && universalPools[ukey] > 0) {
+            // try tiers 1 -> 2 -> 3
+            for (let t=1;t<=3;t++) {
+                if (need_rem[t] <= 0) continue;
+                const needEquiv = need_rem[t] * vals[t];
+                const pool = universalPools[ukey];
+                const useEquiv = Math.min(pool, needEquiv);
+                const units = Math.floor(useEquiv / vals[t]);
+                if (units > 0) {
+                    used_from_universal[t] = units;
+                    need_rem[t] -= units;
+                    universalPools[ukey] -= units * vals[t];
+                }
             }
         }
-        
-        result[itemName] = converted;
+
+        // Second: use remaining own inventory converted to equivalents
+        let remEquiv = 0;
+        for (let t=1;t<=3;t++) remEquiv += inv_rem[t] * vals[t];
+
+        const used_from_inv = {1:0,2:0,3:0};
+        for (let t=3;t>=1;t--) {
+            if (need_rem[t] <= 0) continue;
+            const needEquiv = need_rem[t] * vals[t];
+            const use = Math.min(remEquiv, needEquiv);
+            const units = Math.floor(use / vals[t]);
+            if (units > 0) {
+                used_from_inv[t] = units;
+                need_rem[t] -= units;
+                remEquiv -= units * vals[t];
+            }
+        }
+
+        // final displayed available per tier = used_same + used_from_universal + used_from_inv (cap at needed)
+        for (let t=1;t<=3;t++) {
+            const key = `${base}_${t}`;
+            const needed = data.needed[t];
+            const available = Math.min(needed, used_same[t] + used_from_universal[t] + used_from_inv[t]);
+            result[key] = {
+                needed: needed,
+                available: available,
+                fulfilled: available >= needed,
+                excess: Math.max(0, (used_same[t] + used_from_universal[t] + used_from_inv[t]) - needed)
+            };
+        }
     }
-    
+
     return result;
 }
 
@@ -327,9 +398,17 @@ async function renderMaterials() {
     
     const totalMaterials = await calculateTotalMaterials();
     const convertedMaterials = applyUniversalConversions(totalMaterials, items);
-    
+
+    // Filter out tier_2 and tier_3 XP items (show only tier_1 for Level items)
+    const filteredEntries = Object.entries(totalMaterials).filter(([name, val]) => {
+        if (name.includes('Char_Level_') || name.includes('Part_Level_')) {
+            return name.endsWith('_1');
+        }
+        return true;
+    });
+
     // Sort materials: by priority, then by completion status (incomplete first), then by name
-    const sortedMaterials = Object.entries(totalMaterials).sort((a, b) => {
+    const sortedMaterials = filteredEntries.sort((a, b) => {
         const aConverted = convertedMaterials[a[0]];
         const bConverted = convertedMaterials[b[0]];
         
@@ -375,6 +454,11 @@ async function renderMaterials() {
             displayNeeded = totalNeeded >= 1000 ? (totalNeeded / 1000).toFixed(1) + 'k' : totalNeeded;
             displayAvailable = totalAvailable >= 1000 ? (totalAvailable / 1000).toFixed(1) + 'k' : totalAvailable;
         }
+        else {
+            // format other amounts with k
+            displayNeeded = formatNumber(needed);
+            displayAvailable = formatNumber(converted.available);
+        }
         
         itemDiv.innerHTML = `
             <img src="/static/images/${itemName}.png" alt="${itemName}" class="material-image" 
@@ -411,6 +495,11 @@ function renderBuildingUnits() {
         // Calculate materials for this unit
         const materials = calculateUnitMaterials(unit);
         const materialsHTML = Object.entries(materials)
+            // hide tier_2/_3 XP items; show only _1 for Level items
+            .filter(([itemName, needed]) => {
+                if ((itemName.includes('Char_Level_') || itemName.includes('Part_Level_')) && !itemName.endsWith('_1')) return false;
+                return true;
+            })
             .slice(0, 6)  // Show first 6 materials
             .map(([itemName, needed]) => {
                 const available = items[itemName]?.amount || 0;
@@ -423,7 +512,7 @@ function renderBuildingUnits() {
                         <div class="material-bar ${getItemTier(itemName)}"></div>
                         <div class="material-info">
                             <div class="material-amount ${converted.fulfilled ? 'completed' : 'incomplete'}">
-                                ${converted.available}/${needed}
+                                ${formatNumber(converted.available)}/${formatNumber(needed)}
                             </div>
                         </div>
                         ${converted.fulfilled ? '<div class="check-mark">✓</div>' : ''}
@@ -501,6 +590,14 @@ async function openUnitDetailsModal(unit) {
     document.getElementById('detailsTitle').textContent = unit.name;
     document.getElementById('detailsImage').src = imagePath;
     document.getElementById('detailsName').textContent = `Level ${unit.current_level} → ${unit.goal_level} | Ascension ${unit.current_ascension} → ${unit.goal_ascension}`;
+    // Show potential goals summary
+    const potSummaryEl = document.getElementById('detailsPotentials');
+    if (unit.potentials && unit.potentials.length) {
+        const parts = unit.potentials.map(p => `${p.potential_type.replace(/_/g,' ')}: ${p.current_level} → ${p.goal_level}`);
+        potSummaryEl.textContent = parts.join(' | ');
+    } else {
+        potSummaryEl.textContent = '';
+    }
     
     // Calculate materials for this unit
     const unitMaterials = currentEditingUnit ? await fetchUnitMaterials(unit.id) : {};
@@ -515,10 +612,11 @@ async function openUnitDetailsModal(unit) {
     materialsGrid.style.cssText = 'display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 10px; margin-top: 15px;';
     
     Object.entries(convertedMaterials).forEach(([itemName, converted]) => {
+        // hide tier_2/_3 XP items for display (we only show _1 exp materials)
+        if ((itemName.includes('Char_Level_') || itemName.includes('Part_Level_')) && !itemName.endsWith('_1')) return;
         const itemDiv = document.createElement('div');
         itemDiv.className = 'material-item';
         itemDiv.style.cursor = 'default';
-        
         itemDiv.innerHTML = `
             <img src="/static/images/${itemName}.png" alt="${itemName}" class="material-image"
                  onerror="this.src='/static/images/placeholder.png'">
@@ -526,7 +624,7 @@ async function openUnitDetailsModal(unit) {
             <div class="material-info">
                 <div class="material-name">${itemName.replace(/_/g, ' ')}</div>
                 <div class="material-amount ${converted.fulfilled ? 'completed' : 'incomplete'}">
-                    ${converted.available} / ${converted.needed}
+                    ${formatNumber(converted.available)} / ${formatNumber(converted.needed)}
                 </div>
             </div>
             ${converted.fulfilled ? '<div class="check-mark">✓</div>' : ''}
