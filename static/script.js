@@ -140,7 +140,9 @@ function getItemTier(itemName) {
 // Format large numbers using 'k' for thousands
 function formatNumber(n) {
     if (typeof n !== 'number') n = parseInt(n) || 0;
-    if (Math.abs(n) >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+    const abs = Math.abs(n);
+    if (abs >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'm';
+    if (abs >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
     return String(n);
 }
 
@@ -322,6 +324,13 @@ function applyUniversalConversions(materialsNeeded, inventory) {
         }
     }
 
+    // global converted-inventory pools (tier-1 equivalents) per universal key
+    const inventoryEquivPools = {};
+    for (const base of Object.keys(bases)) {
+        const ukey = universalKeyFor(base);
+        if (ukey && inventoryEquivPools[ukey] === undefined) inventoryEquivPools[ukey] = 0;
+    }
+
     // preserve insertion order of bases according to first appearance in materialsNeeded
     const baseOrder = Object.keys(bases);
 
@@ -357,20 +366,25 @@ function applyUniversalConversions(materialsNeeded, inventory) {
             }
         }
 
-        // Second: use remaining own inventory converted to equivalents
-        let remEquiv = 0;
-        for (let t=1;t<=3;t++) remEquiv += inv_rem[t] * vals[t];
-
-        const used_from_inv = {1:0,2:0,3:0};
-        for (let t=3;t>=1;t--) {
-            if (need_rem[t] <= 0) continue;
-            const needEquiv = need_rem[t] * vals[t];
-            const use = Math.min(remEquiv, needEquiv);
-            const units = Math.floor(use / vals[t]);
-            if (units > 0) {
-                used_from_inv[t] = units;
-                need_rem[t] -= units;
-                remEquiv -= units * vals[t];
+        // Second: add this base's remaining inventory (converted) into a global pool if it has a universal key
+        const ukeyInv = universalKeyFor(base);
+        if (ukeyInv) {
+            for (let t=1;t<=3;t++) inventoryEquivPools[ukeyInv] += inv_rem[t] * vals[t];
+        } else {
+            // If there's no universal key (e.g. XP Level items), convert remaining inventory locally and consume immediately
+            let remEquivLocal = 0;
+            for (let t=1;t<=3;t++) remEquivLocal += inv_rem[t] * vals[t];
+            var used_from_inv = {1:0,2:0,3:0};
+            for (let t=3;t>=1;t--) {
+                if (need_rem[t] <= 0) continue;
+                const needEquiv = need_rem[t] * vals[t];
+                const use = Math.min(remEquivLocal, needEquiv);
+                const units = Math.floor(use / vals[t]);
+                if (units > 0) {
+                    used_from_inv[t] = units;
+                    need_rem[t] -= units;
+                    remEquivLocal -= units * vals[t];
+                }
             }
         }
 
@@ -378,12 +392,16 @@ function applyUniversalConversions(materialsNeeded, inventory) {
         for (let t=1;t<=3;t++) {
             const key = `${base}_${t}`;
             const needed = data.needed[t];
-            const available = Math.min(needed, used_same[t] + used_from_universal[t] + used_from_inv[t]);
+            const rawAvailable = used_same[t] + (used_from_universal[t] || 0) + (used_from_inv[t] || 0);
+
+            // Safety cap: do not report more available than convertMaterials says is possible
+            const cap = convertMaterials(key, needed, inventory[key]?.amount || 0).available;
+            const available = Math.min(needed, rawAvailable, cap);
             result[key] = {
                 needed: needed,
                 available: available,
                 fulfilled: available >= needed,
-                excess: Math.max(0, (used_same[t] + used_from_universal[t] + used_from_inv[t]) - needed)
+                excess: Math.max(0, rawAvailable - needed)
             };
         }
     }
