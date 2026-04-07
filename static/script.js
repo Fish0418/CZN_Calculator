@@ -148,6 +148,8 @@ function formatNumber(n) {
 
 // Get material sort priority (lower = earlier)
 function getMaterialSortPriority(itemName) {
+    // Ensure universal materials appear at the very bottom of lists
+    if (itemName.includes('Universal')) return 100;
     if (itemName === 'Unit') return 1;
     if (itemName.includes('Char_Level')) return 2;
     if (itemName.includes('Part_Level')) return 3;
