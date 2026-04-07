@@ -958,8 +958,12 @@ function openEditInventoryModal() {
     const grid = document.getElementById('inventoryGrid');
     grid.innerHTML = '';
     
-    // Sort items by type and name
+    // Sort items by putting universal items at the bottom, then by type and name
+    const isUniversal = name => name.includes('Universal');
     const sortedItems = Object.entries(items).sort((a, b) => {
+        const aUni = isUniversal(a[0]);
+        const bUni = isUniversal(b[0]);
+        if (aUni !== bUni) return aUni ? 1 : -1;
         if (a[1].type !== b[1].type) return a[1].type.localeCompare(b[1].type);
         return a[0].localeCompare(b[0]);
     });
