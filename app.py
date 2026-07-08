@@ -154,12 +154,28 @@ def calculate_materials_for_unit(unit_id):
                         
                         materials['Unit'] = materials.get('Unit', 0) + credit
                         
-                        # Boss materials
+                        # Boss materials (support single-boss rows, explicit multi-boss columns, and legacy extra-field rows)
+                        boss_entries = []
                         if pot_row.get('Boss'):
-                            boss_key = pot_row['Boss']
-                            if char_info and boss_key in char_info:
+                            boss_entries.append((pot_row['Boss'], int(pot_row.get('Boss_Amt', 0) or 0)))
+
+                        for idx in range(1, 10):
+                            boss_key = pot_row.get(f'Boss_{idx}')
+                            boss_amt = pot_row.get(f'Boss_Amt_{idx}')
+                            if boss_key:
+                                boss_entries.append((boss_key, int(boss_amt or 0)))
+
+                        extra_fields = pot_row.get(None) or []
+                        if len(extra_fields) >= 2:
+                            for idx in range(0, len(extra_fields), 2):
+                                boss_key = extra_fields[idx]
+                                boss_amt = extra_fields[idx + 1] if idx + 1 < len(extra_fields) else 0
+                                if boss_key:
+                                    boss_entries.append((boss_key, int(boss_amt or 0)))
+
+                        for boss_key, boss_amt in boss_entries:
+                            if boss_amt and char_info and boss_key in char_info:
                                 boss_item = char_info[boss_key]
-                                boss_amt = int(pot_row['Boss_Amt'])
                                 materials[boss_item] = materials.get(boss_item, 0) + boss_amt
                         
                         # Ego crystals
@@ -593,7 +609,8 @@ def get_potential_types():
         'Unique_1',
         'Unique_2',
         'Unique_3',
-        'Unique_4'
+        'Unique_4',
+        'Unique_5'
     ]
     
     # Get max levels for each type

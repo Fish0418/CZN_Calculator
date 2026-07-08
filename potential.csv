@@ -1,8 +1,9 @@
-Node,Level,Type,Cost,Credit,Boss,Boss_Amt,Ego_Crystal
+Node,Level,Type,Cost,Credit,Boss,Boss_Amt,Ego_Crystal,Boss_2,Boss_Amt_2
 Unique_1,0,1,8,10000
 Unique_2,0,2,16,24000
 Unique_3,0,3,26,60000,Boss_1,2
 Unique_4,0,3,36,80000,Boss_1,2
+Unique_5,0,3,30,75000,Boss_1,2,,Boss_2,4
 Comm_Basic_Level,0,1,4,3000
 Comm_Basic_Level,1,1,4,3000
 Comm_Basic_Level,2,1,4,3000

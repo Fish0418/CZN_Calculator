@@ -9,15 +9,16 @@ let selectedUnitType = 'Character';
 
 // Default target levels for potentials when adding a new character
 const DEFAULT_GOAL_POTENTIALS = {
-    Comm_Basic_Level: 10,
-    Comm_Common_Level: 7,
-    Comm_Unique_Level: 7,
-    Crit_Chance_Level: 3,
-    Crit_Dmg_Level: 3,
+    Comm_Basic_Level: 1,
+    Comm_Common_Level: 1,
+    Comm_Unique_Level: 1,
+    Crit_Chance_Level: 1,
+    Crit_Dmg_Level: 1,
     Unique_1: 1,
     Unique_2: 1,
     Unique_3: 1,
-    Unique_4: 1
+    Unique_4: 1,
+    Unique_5: 1
 };
 
 // Initialize on page load
@@ -745,7 +746,8 @@ function renderPotentials(unit) {
         'Unique_1',
         'Unique_2',
         'Unique_3',
-        'Unique_4'
+        'Unique_4',
+        'Unique_5'
     ];
     
     currentDiv.innerHTML = '<h4>Potentials:</h4>';
@@ -813,7 +815,8 @@ function renderEditPotentials(unit) {
         'Unique_1',
         'Unique_2',
         'Unique_3',
-        'Unique_4'
+        'Unique_4',
+        'Unique_5'
     ];
     
     currentDiv.innerHTML = '<h4>Potentials:</h4>';
